@@ -8,8 +8,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 5] 局部尖峰与深谷插值修复 ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗\04_孕前与早孕异动修复版.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗"
+INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走\04_孕前与早孕异动修复版.csv"
+OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
 OUT_CSV = os.path.join(OUT_DIR, "05_局部尖峰处理版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "05_局部尖峰修复_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "05_Plots_局部尖峰")
@@ -108,6 +108,53 @@ def clean_spikes(group):
                 w_orig[idx2] = nw2
                 logs.append(f"Day {days[idx1]}d & {days[idx2]}d: 双尖峰 | {w1:.1f},{w2:.1f} -> {nw1:.1f},{nw2:.1f}")
                 changed = True
+
+    # 首尾边界点单位错误检测（主循环无法覆盖的盲区）
+    # 使用前/后 2 个邻居的中位数作为参考基线
+    if n_v >= 3:
+        # 最后一个点
+        last_idx = v_idx[-1]
+        last_w = w_orig[last_idx]
+        prev2_w = [w_orig[v_idx[j]] for j in range(max(0, n_v-3), n_v-1) if not pd.isna(w_orig[v_idx[j]])]
+        if prev2_w:
+            ref = np.median(prev2_w)
+            # 向上尖峰（最后一个点是斤）
+            if last_w - ref > 25 and 1.6 <= last_w / ref <= 3.0:
+                new_w = round(last_w / 2.0, 2)
+                allow = 6.0 + max(3, days[last_idx] - days[v_idx[-2]]) * 0.15
+                if abs(new_w - ref) <= allow:
+                    w_orig[last_idx] = new_w
+                    logs.append(f"Day {days[last_idx]}d: 尾部尖峰(斤) | {last_w:.1f} -> {new_w:.1f} (邻居参考 {ref:.1f})")
+                    changed = True
+            # 向下深谷（最后一个点是公斤，前面全是斤）
+            elif ref - last_w > 25 and 1.6 <= ref / last_w <= 3.0:
+                new_w = round(last_w * 2.0, 2)
+                allow = 6.0 + max(3, days[last_idx] - days[v_idx[-2]]) * 0.15
+                if abs(new_w - ref) <= allow:
+                    w_orig[last_idx] = new_w
+                    logs.append(f"Day {days[last_idx]}d: 尾部深谷(公斤) | {last_w:.1f} -> {new_w:.1f} (邻居参考 {ref:.1f})")
+                    changed = True
+
+        # 第一个点（同理处理首部边界）
+        first_idx = v_idx[0]
+        first_w = w_orig[first_idx]
+        next2_w = [w_orig[v_idx[j]] for j in range(1, min(3, n_v)) if not pd.isna(w_orig[v_idx[j]])]
+        if next2_w:
+            ref = np.median(next2_w)
+            if first_w - ref > 25 and 1.6 <= first_w / ref <= 3.0:
+                new_w = round(first_w / 2.0, 2)
+                allow = 6.0 + max(3, days[v_idx[1]] - days[first_idx]) * 0.15
+                if abs(new_w - ref) <= allow:
+                    w_orig[first_idx] = new_w
+                    logs.append(f"Day {days[first_idx]}d: 首部尖峰(斤) | {first_w:.1f} -> {new_w:.1f} (邻居参考 {ref:.1f})")
+                    changed = True
+            elif ref - first_w > 25 and 1.6 <= ref / first_w <= 3.0:
+                new_w = round(first_w * 2.0, 2)
+                allow = 6.0 + max(3, days[v_idx[1]] - days[first_idx]) * 0.15
+                if abs(new_w - ref) <= allow:
+                    w_orig[first_idx] = new_w
+                    logs.append(f"Day {days[first_idx]}d: 首部深谷(公斤) | {first_w:.1f} -> {new_w:.1f} (邻居参考 {ref:.1f})")
+                    changed = True
             
     group['weight_cleaned'] = w_orig
     return group, logs, changed

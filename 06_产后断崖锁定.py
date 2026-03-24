@@ -8,8 +8,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 6] 产后断崖锁定 (结合分娩记录打标免修) ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗\05_局部尖峰处理版.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗"
+INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走\05_局部尖峰处理版.csv"
+OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
 OUT_CSV = os.path.join(OUT_DIR, "06_产后断崖锁定版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "06_产后断崖锁定_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "06_Plots_产后免修锁定")
@@ -77,6 +77,8 @@ def mark_postpartum_drops(group, nid, delivery_map):
     
     v_idx = np.where(valid_mask)[0]
     n_v = len(v_idx)
+    v_w = w_orig[v_idx]
+    v_days = days[v_idx]
     logs, marked = [], False
     
     is_pp = np.zeros(len(w_orig), dtype=bool)
@@ -99,7 +101,18 @@ def mark_postpartum_drops(group, nid, delivery_map):
         threshold_day = 270 # 如果没有分娩记录作兜底
         cond_str = "无分娩记录兜底 >270d"
     
+    # 获取孕前基准体重 (W0)，取前14天内的最早记录
+    W0 = None
+    if n_v > 0:
+        early_records = [v_w_val for i_v, v_w_val in enumerate(v_w) if v_days[i_v] <= 14]
+        if early_records:
+            W0 = early_records[0]
+
     if n_v >= 2:
+        # 有明确分娩记录时，不约束跌幅上限（分娩后任何跌幅都是生理正常的）
+        # 无分娩记录兜底时，适当设一个宽松上限防止误标
+        drop_upper = None if delivery_gday is not None else 35.0
+        
         for i in range(1, n_v):
             curr_idx = v_idx[i]
             prev_idx = v_idx[i-1]
@@ -108,13 +121,22 @@ def mark_postpartum_drops(group, nid, delivery_map):
             curr_day = days[curr_idx]
             prev_day = days[prev_idx]
             
+            drop = prev_w - curr_w
             # 跌幅 > 4.5kg 且在临产期后
-            if curr_day >= threshold_day and (prev_w - curr_w) > 4.5 and (prev_w - curr_w) < 22:
+            if curr_day >= threshold_day and drop > 4.5:
+                # 极端异常校验：防止分娩大出血或严重的系统录入错误
+                # 如果跌幅超过 25kg 且最终体重比孕前还低 15kg 以上，则认定为记录错误而非正常分娩
+                if W0 is not None and drop > 25.0 and curr_w < (W0 - 20.0):
+                    continue # 认为是错误记录，不打免修标签，留给后续 07 脚本删除
+                
+                if drop_upper is not None and drop > drop_upper:
+                    continue  # 无分娩记录兜底时，跌幅过大可能不是分娩
+                    
                 for j in range(i, n_v):
                     is_pp[v_idx[j]] = True
                 
                 marked = True
-                logs.append(f"Day {curr_day}d: 锁定产后断崖 ({cond_str}) | {prev_w:.1f} -> {curr_w:.1f} (下降 {prev_w-curr_w:.1f}kg)")
+                logs.append(f"Day {curr_day}d: 锁定产后断崖 ({cond_str}) | {prev_w:.1f} -> {curr_w:.1f} (下降 {drop:.1f}kg)")
                 break 
                 
     group['is_postpartum_normal'] = is_pp
