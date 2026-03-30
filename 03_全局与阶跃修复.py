@@ -10,8 +10,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 3] 全局斤系与长程阶跃修复 ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗\02_初步清洗_去低级失误版.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\市妇幼系统\清洗"
+INPUT_CSV = r"02_初步清洗_去低级失误版.csv"
+OUT_DIR = r"gestational-weight-records-cleaning-pipline"
 OUT_CSV = os.path.join(OUT_DIR, "03_全局与阶跃修复版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "03_全局与阶跃修复_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "03_Plots_全局与阶跃")

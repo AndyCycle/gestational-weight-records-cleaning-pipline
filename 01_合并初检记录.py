@@ -6,12 +6,12 @@ print("=== [Pipeline Step 1] 合并初检记录 ===")
 
 # ================= 配置路径 =================
 INIT_FILES = [
-    r"E:\文件\研究生\项目\肥胖分布统计\宝安\初检\孕妇初检-第五批-to liu-20260319.xlsx",
-    r"E:\文件\研究生\项目\肥胖分布统计\宝安\初检\孕期初检-2017年-2023年-to liu-20260319.xlsx"
+    r"孕妇初检-第五批.xlsx",
+    r"孕期初检-2017年-2023年xlsx"
 ]
-HIS_PATH = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\宝安_HIS前处理_合并表.csv"
+HIS_PATH = r"宝安_HIS前处理_合并表.csv"
 
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
+OUT_DIR = r"gestational-weight-records-cleaning-pipline"
 os.makedirs(OUT_DIR, exist_ok=True)
 OUT_PATH = os.path.join(OUT_DIR, "01_合并后底表_带初检.csv")
 

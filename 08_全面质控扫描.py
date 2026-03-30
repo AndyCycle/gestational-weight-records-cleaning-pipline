@@ -10,8 +10,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 8] 全面质控扫描与可视化审计 ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走\07_终极清洗结果版_可用于插值.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
+INPUT_CSV = r"07_终极清洗结果版_可用于插值.csv"
+OUT_DIR = r"gestational-weight-records-cleaning-pipline"
 REPORT_FILE = os.path.join(OUT_DIR, "08_质控扫描报告.txt")
 FLAGGED_CSV = os.path.join(OUT_DIR, "08_被标记的可疑样本一览.csv")
 

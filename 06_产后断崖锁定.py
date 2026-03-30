@@ -8,17 +8,17 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 6] 产后断崖锁定 (结合分娩记录打标免修) ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走\05_局部尖峰处理版.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
+INPUT_CSV = r"05_局部尖峰处理版.csv"
+OUT_DIR = r"gestational-weight-records-cleaning-pipline"
 OUT_CSV = os.path.join(OUT_DIR, "06_产后断崖锁定版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "06_产后断崖锁定_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "06_Plots_产后免修锁定")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 DELIVERY_FILES = [
-    r"E:\文件\研究生\项目\宝安妇幼数据搜索\搜索数据\保健号编码后-给宝安\分娩记录-201707-202312-清洗地址后.csv",
-    r"E:\文件\研究生\项目\宝安妇幼数据搜索\搜索数据\保健号编码后-给宝安\分娩记录-第5批-2-清洗地址-去重后-icd11_mapped.xlsx",
-    r"E:\文件\研究生\项目\宝安妇幼数据搜索\搜索数据\保健号编码后-给宝安\分娩记录-第5批-1-清洗地址后-icd11_mapped.xlsx"
+    r"分娩记录-201707-202312-清洗地址后.csv",
+    r"分娩记录-第5批-2-清洗地址-去重后-icd11_mapped.xlsx",
+    r"分娩记录-第5批-1-清洗地址后-icd11_mapped.xlsx"
 ]
 
 def load_delivery_data():

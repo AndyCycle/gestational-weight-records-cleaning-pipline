@@ -8,8 +8,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 5] 局部尖峰与深谷插值修复 ===")
 
-INPUT_CSV = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走\04_孕前与早孕异动修复版.csv"
-OUT_DIR = r"E:\文件\研究生\项目\肥胖分布统计\宝安\HIS系统\清洗管线重构_三步走"
+INPUT_CSV = r"04_孕前与早孕异动修复版.csv"
+OUT_DIR = r"gestational-weight-records-cleaning-pipline"
 OUT_CSV = os.path.join(OUT_DIR, "05_局部尖峰处理版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "05_局部尖峰修复_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "05_Plots_局部尖峰")
