@@ -8,8 +8,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 4] 孕前与早孕异动校准 ===")
 
-INPUT_CSV = r"03_全局与阶跃修复版.csv"
-OUT_DIR = r"gestational-weight-records-cleaning-pipline"
+INPUT_CSV = r"03_5_day0双源核验版.csv"
+OUT_DIR = r"."
 OUT_CSV = os.path.join(OUT_DIR, "04_孕前与早孕异动修复版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "04_早孕异动修复_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "04_Plots_早孕异动")
@@ -132,3 +132,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

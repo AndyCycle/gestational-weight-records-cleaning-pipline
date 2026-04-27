@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -9,7 +9,7 @@ plt.rcParams['axes.unicode_minus'] = False
 print("=== [Pipeline Step 7] 终极平滑与死错淘汰 ===")
 
 INPUT_CSV = r"06_产后断崖锁定版.csv"
-OUT_DIR = r"gestational-weight-records-cleaning-pipline"
+OUT_DIR = r"."
 OUT_CSV = os.path.join(OUT_DIR, "07_终极清洗结果版_可用于插值.csv")
 LOG_FILE = os.path.join(OUT_DIR, "07_极值死错清理_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "07_Plots_终极死错剔除")

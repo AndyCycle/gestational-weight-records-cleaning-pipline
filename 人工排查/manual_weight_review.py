@@ -39,12 +39,14 @@ LOG_COLUMNS = [
     "operation",
     "row_id",
     "sample_id",
+    "gestation_day",
     "old_weight",
     "new_weight",
     "old_bmi",
     "new_bmi",
     "old_deleted",
     "new_deleted",
+    "csv_row_count",
 ]
 
 
@@ -120,6 +122,7 @@ class ReviewStore:
 
         df = pd.read_csv(self.source_path, low_memory=False)
         self.original_columns = list(df.columns)
+        self._csv_row_count = len(df)  # 记录原始行数，用于 replay 校验
 
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
         if missing:
@@ -141,6 +144,27 @@ class ReviewStore:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # 兜底：weight 为 NaN 且来源为 Initial_Raw 时，尝试用 weight_raw_p1 填补。
+        # 仅限 type='Initial_Raw'（day=0 种子行，因 Step 01 NaN bug 导致 weight 未写入）。
+        # HIS 序列行（type 为空）若 weight=NaN 通常是 Step 07 主动置空的异常点，不应恢复。
+        if "weight_raw_p1" in df.columns and "type" in df.columns:
+            fallback_mask = (
+                df["weight"].isna()
+                & df["weight_raw_p1"].notna()
+                & (df["type"].astype(str).str.strip() == "Initial_Raw")
+            )
+            if fallback_mask.any():
+                df.loc[fallback_mask, "weight"] = df.loc[fallback_mask, "weight_raw_p1"]
+                print(f"  [兜底] 已用 weight_raw_p1 填补 {fallback_mask.sum()} 行 Initial_Raw 种子行的 weight 缺失值")
+            # 统计 HIS 行中被保护的 NaN（pipeline 主动置空，不填补）
+            protected_mask = (
+                df["weight"].isna()
+                & df["weight_raw_p1"].notna()
+                & (df["type"].astype(str).str.strip() != "Initial_Raw")
+            )
+            if protected_mask.any():
+                print(f"  [保护] {protected_mask.sum()} 行 HIS 序列行 weight=NaN 为 pipeline 主动置空，已跳过填补")
+
         df["项目流水号"] = df["项目流水号"].astype("category")
 
         self.df = df
@@ -152,12 +176,31 @@ class ReviewStore:
         self.sample_index = df.groupby("项目流水号", observed=True).indices
 
         replayed = self.replay_log()
+        # 全局重算 BMI（保证显示值与当前 weight/height 一致，而非 CSV 原始值）
+        self._recalc_all_bmi()
 
         return {
             "rows": int(len(df)),
             "samples": int(len(self.sample_ids)),
             "replayed_edits": int(replayed),
         }
+
+    def _recalc_all_bmi(self) -> None:
+        """基于当前 weight 和 height 列实时重算全表 BMI，覆盖 CSV 中的原始值。"""
+        if self.df is None or "weight" not in self.df.columns or "height" not in self.df.columns:
+            return
+        if "BMI" not in self.df.columns:
+            self.df["BMI"] = np.nan
+        for row_id in self.df.index:
+            w = self.df.at[row_id, "weight"]
+            h = self.df.at[row_id, "height"]
+            if pd.notna(w) and pd.notna(h):
+                h_val = float(h)
+                h_m = h_val / 100.0 if h_val > 3 else h_val
+                if h_m > 0:
+                    self.df.at[row_id, "BMI"] = round(float(w) / (h_m * h_m), 2)
+                    continue
+            self.df.at[row_id, "BMI"] = np.nan
 
     def replay_log(self) -> int:
         if self.df is None or not self.log_path.exists():
@@ -171,14 +214,55 @@ class ReviewStore:
         if not required.issubset(set(log_df.columns)):
             return 0
 
+        # ---- 行数校验：检测 CSV 是否在两次加载之间被替换 ----
+        has_row_count_col = "csv_row_count" in log_df.columns
+        if has_row_count_col:
+            log_row_counts = log_df["csv_row_count"].dropna().unique()
+            if len(log_row_counts) > 0:
+                log_rc = int(log_row_counts[0])
+                if log_rc != self._csv_row_count:
+                    print(
+                        f"  [警告] edit log 记录时 CSV 行数={log_rc}，"
+                        f"当前 CSV 行数={self._csv_row_count}。\n"
+                        f"         CSV 可能已被重新生成！为安全起见，跳过全部 replay。\n"
+                        f"         如确认需要应用旧日志，请手动删除: {self.log_path}"
+                    )
+                    return 0
+
+        # ---- 逐条校验并 replay ----
+        has_gday_col = "gestation_day" in log_df.columns
         applied = 0
+        skipped = 0
         for row in log_df.itertuples(index=False):
             try:
                 row_id = int(getattr(row, "row_id"))
             except Exception:
                 continue
             if row_id not in self.df.index:
+                skipped += 1
                 continue
+
+            # ---- 复合键校验：sample_id + gestation_day ----
+            if has_gday_col:
+                log_sid = str(getattr(row, "sample_id", "")).strip()
+                log_gday = getattr(row, "gestation_day", None)
+                actual_sid = str(self.df.at[row_id, "项目流水号"]).strip()
+                actual_gday = self.df.at[row_id, "gestation_day"]
+                sid_match = (log_sid == actual_sid)
+                gday_match = True
+                if log_gday is not None and not pd.isna(log_gday):
+                    try:
+                        gday_match = (int(float(log_gday)) == int(float(actual_gday)))
+                    except (ValueError, TypeError):
+                        gday_match = False
+                if not sid_match or not gday_match:
+                    print(
+                        f"  [replay 跳过] row_id={row_id}: "
+                        f"日志({log_sid}, day{log_gday}) ≠ "
+                        f"实际({actual_sid}, day{actual_gday})"
+                    )
+                    skipped += 1
+                    continue
 
             new_weight = getattr(row, "new_weight", np.nan)
             if not pd.isna(new_weight):
@@ -194,6 +278,8 @@ class ReviewStore:
             self.df.at[row_id, "_deleted"] = parse_bool(getattr(row, "new_deleted", False))
             applied += 1
 
+        if skipped > 0:
+            print(f"  [replay] 应用 {applied} 条，跳过 {skipped} 条（键不匹配或 row_id 越界）")
         return applied
 
     def get_sample_df(self, sample_id: str, include_deleted: bool = True) -> pd.DataFrame:
@@ -221,17 +307,22 @@ class ReviewStore:
 
     def _append_log(self, edit: EditResult) -> None:
         self.ensure_dirs()
+        gday = np.nan
+        if self.df is not None and edit.row_id in self.df.index:
+            gday = self.df.at[edit.row_id, "gestation_day"]
         payload = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "operation": edit.operation,
             "row_id": edit.row_id,
             "sample_id": edit.sample_id,
+            "gestation_day": gday,
             "old_weight": edit.old_weight,
             "new_weight": edit.new_weight,
             "old_bmi": edit.old_bmi,
             "new_bmi": edit.new_bmi,
             "old_deleted": edit.old_deleted,
             "new_deleted": edit.new_deleted,
+            "csv_row_count": getattr(self, '_csv_row_count', np.nan),
         }
         frame = pd.DataFrame([payload], columns=LOG_COLUMNS)
         frame.to_csv(
@@ -356,7 +447,8 @@ class ReviewApp:
         self.current_active_df = pd.DataFrame()
         self.current_plot_df = pd.DataFrame()
         self.plot_row_ids: np.ndarray = np.array([], dtype=np.int64)
-        self.selected_row_id: Optional[int] = None
+        self.selected_row_id: Optional[int] = None   # 最后一次单击/图表选中的主选点
+        self.selected_row_ids: List[int] = []          # 当前全部选中点（支持多选）
 
         self.sample_pos_map: Dict[str, int] = {}
 
@@ -455,8 +547,9 @@ class ReviewApp:
             row=0, column=0, sticky="w", pady=(0, 6)
         )
 
-        cols = ["row_id", "gestation_day", "weight", "BMI", "type", "status", "suspect", "reason"]
-        tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=24)
+        cols = ["row_id", "gestation_day", "weight", "BMI", "height", "type", "status", "suspect", "reason"]
+        tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=24,
+                            selectmode="extended")  # 支持 Shift/Ctrl 多选
         self.tree = tree
         self.row_item_map = {}
 
@@ -465,36 +558,52 @@ class ReviewApp:
             "gestation_day": "gestation_day",
             "weight": "weight",
             "BMI": "BMI",
+            "height": "height(cm)",
             "type": "type",
             "status": "status",
             "suspect": "suspect",
             "reason": "reason",
         }
         widths = {
-            "row_id": 80,
-            "gestation_day": 110,
-            "weight": 95,
-            "BMI": 90,
-            "type": 120,
-            "status": 80,
-            "suspect": 80,
-            "reason": 260,
+            "row_id": 72,
+            "gestation_day": 100,
+            "weight": 88,
+            "BMI": 80,
+            "height": 80,
+            "type": 110,
+            "status": 72,
+            "suspect": 72,
+            "reason": 240,
         }
 
         for c in cols:
             tree.heading(c, text=headers[c])
-            tree.column(c, width=widths[c], anchor="center")
+            tree.column(c, width=widths[c], anchor="center", minwidth=50)
 
         yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=yscroll.set)
+        xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
         tree.grid(row=1, column=0, sticky="nsew")
         yscroll.grid(row=1, column=1, sticky="ns")
+        xscroll.grid(row=2, column=0, sticky="ew")
         tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         tree.tag_configure("deleted", foreground="#888888")
         tree.tag_configure("suspicious", background="#fff4d6")
 
+        # Shift+滚轮 → 横向滚动
+        def _on_shift_scroll(event):
+            # Windows: event.delta 为 ±120 的倍数
+            # Linux/Mac: event.num 为 4/5
+            if event.num == 4 or event.delta > 0:
+                tree.xview_scroll(-2, "units")
+            else:
+                tree.xview_scroll(2, "units")
+        tree.bind("<Shift-MouseWheel>", _on_shift_scroll)  # Windows / macOS
+        tree.bind("<Shift-Button-4>", _on_shift_scroll)    # Linux 向上
+        tree.bind("<Shift-Button-5>", _on_shift_scroll)    # Linux 向下
+
         action = ttk.LabelFrame(table_frame, text="点位操作", padding=(10, 8))
-        action.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        action.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         action.columnconfigure(0, weight=1)
         action.columnconfigure(1, weight=1)
         action.columnconfigure(2, weight=1)
@@ -636,6 +745,7 @@ class ReviewApp:
         previous_selected = self.selected_row_id if keep_selection else None
         self.current_sample_id = sample_id
         self.selected_row_id = None
+        self.selected_row_ids = []
         self.selected_info_var.set("已选中记录: 无")
         self._set_action_state(False)
 
@@ -694,11 +804,29 @@ class ReviewApp:
             row_id = int(row_id)
             deleted = bool(row["_deleted"])
             suspicious = bool(row.get("_suspicious", False))
+            # height: 取该行 height 字段（cm 单位），若为 m 则自动转换显示
+            raw_h = row.get("height", np.nan)
+            if pd.notna(raw_h):
+                h_val = float(raw_h)
+                if 1.0 < h_val < 3.0:
+                    h_val = round(h_val * 100, 1)  # m → cm
+                height_str = f"{h_val:.1f}"
+            else:
+                height_str = ""
+            # 实时 BMI：从当前 weight 和 height 现算，而非 CSV 原始值
+            cur_w = self.store.df.at[row_id, "weight"] if self.store.df is not None and row_id in self.store.df.index else np.nan
+            cur_h = self.store.df.at[row_id, "height"] if self.store.df is not None and row_id in self.store.df.index else np.nan
+            if pd.notna(cur_w) and pd.notna(cur_h) and float(cur_h) > 0:
+                h_m = float(cur_h) / 100.0 if float(cur_h) > 3 else float(cur_h)
+                live_bmi = round(float(cur_w) / (h_m * h_m), 2) if h_m > 0 else np.nan
+            else:
+                live_bmi = np.nan
             values = [
                 row_id,
                 fmt_number(row.get("gestation_day", np.nan), 0),
                 fmt_number(row.get("weight", np.nan), 3),
-                fmt_number(row.get("BMI", np.nan), 3),
+                fmt_number(live_bmi, 2),  # 实时 BMI
+                height_str,
                 "" if pd.isna(row.get("type", np.nan)) else str(row.get("type")),
                 "deleted" if deleted else "active",
                 "Y" if suspicious else "",
@@ -785,13 +913,20 @@ class ReviewApp:
                     zorder=4,
                 )
 
-        if self.selected_row_id is not None and self.selected_row_id in set(self.plot_row_ids.tolist()):
-            match = np.where(self.plot_row_ids == self.selected_row_id)[0]
-            if len(match) > 0 and self.line is not None:
-                xdata = self.line.get_xdata()
-                ydata = self.line.get_ydata()
-                idx = int(match[0])
-                self.ax.scatter([xdata[idx]], [ydata[idx]], s=140, color="#d62728", zorder=6)
+        # 高亮所有选中点（多选时逐一标记）
+        plot_ids_set = set(self.plot_row_ids.tolist())
+        if self.selected_row_ids and self.line is not None:
+            xdata = self.line.get_xdata()
+            ydata = self.line.get_ydata()
+            sel_x, sel_y = [], []
+            for sel_rid in self.selected_row_ids:
+                if sel_rid in plot_ids_set:
+                    match = np.where(self.plot_row_ids == sel_rid)[0]
+                    if len(match) > 0:
+                        sel_x.append(xdata[int(match[0])])
+                        sel_y.append(ydata[int(match[0])])
+            if sel_x:
+                self.ax.scatter(sel_x, sel_y, s=140, color="#d62728", zorder=6)
 
         mode_label = "疑似筛查模式" if only_suspect else "全量模式"
         self.ax.set_title(f"样本 {sid} 体重轨迹 ({mode_label})")
@@ -817,68 +952,120 @@ class ReviewApp:
         picked = self.tree.selection()
         if not picked:
             return
-        values = self.tree.item(picked[0], "values")
-        if not values:
+        # 收集全部选中行
+        row_ids = []
+        for item in picked:
+            vals = self.tree.item(item, "values")
+            if vals:
+                try:
+                    row_ids.append(int(vals[0]))
+                except (ValueError, TypeError):
+                    pass
+        if not row_ids:
             return
-        row_id = int(values[0])
-        self._select_row(row_id, sync_tree=False)
+        # 以最后点击的行（picked[-1]）作为主选点
+        self._select_rows(row_ids, primary_row_id=row_ids[-1], sync_tree=False)
 
     def _select_row(self, row_id: int, sync_tree: bool) -> None:
-        if self.store.df is None or row_id not in self.store.df.index:
+        """单点选中（保持向后兼容，内部委托给 _select_rows）。"""
+        self._select_rows([row_id], primary_row_id=row_id, sync_tree=sync_tree)
+
+    def _select_rows(self, row_ids: List[int], primary_row_id: int, sync_tree: bool) -> None:
+        """多点选中核心方法。row_ids 为全部选中点，primary_row_id 为主选点（用于详情展示）。"""
+        if self.store.df is None:
             return
-        self.selected_row_id = row_id
+        # 过滤掉不在 df 中的 id
+        valid_ids = [r for r in row_ids if r in self.store.df.index]
+        if not valid_ids:
+            return
+        self.selected_row_ids = valid_ids
+        self.selected_row_id = primary_row_id if primary_row_id in self.store.df.index else valid_ids[0]
 
-        if self.tree is not None and sync_tree and row_id in self.row_item_map:
-            item = self.row_item_map[row_id]
-            self.tree.selection_set(item)
-            self.tree.see(item)
+        if self.tree is not None and sync_tree:
+            items = [self.row_item_map[r] for r in valid_ids if r in self.row_item_map]
+            if items:
+                self.tree.selection_set(items)
+                self.tree.see(items[-1])
 
-        row = self.store.df.loc[row_id]
+        row = self.store.df.loc[self.selected_row_id]
         deleted = bool(row["_deleted"])
-        status = "deleted" if deleted else "active"
-        suspect_text = ""
-        if row_id in self.current_sample_df.index:
-            sample_row = self.current_sample_df.loc[row_id]
-            if bool(sample_row.get("_suspicious", False)):
-                reason = str(sample_row.get("_suspect_reason", ""))
-                suspect_text = f" | suspect=Y {reason}" if reason else " | suspect=Y"
-        self.selected_info_var.set(
-            f"已选中 row_id={row_id} | day={fmt_number(row['gestation_day'], 0)} | "
-            f"weight={fmt_number(row['weight'], 3)} | status={status}{suspect_text}"
-        )
-        self._set_action_state(not deleted)
+        n = len(valid_ids)
+        if n > 1:
+            active_cnt = sum(
+                1 for r in valid_ids
+                if not bool(self.store.df.at[r, "_deleted"])
+            )
+            self.selected_info_var.set(
+                f"已选中 {n} 条记录（{active_cnt} 条有效）| 按操作按钮批量执行"
+            )
+            # 只要有至少 1 条 active，就允许操作
+            self._set_action_state(active_cnt > 0)
+        else:
+            status = "deleted" if deleted else "active"
+            suspect_text = ""
+            if self.selected_row_id in self.current_sample_df.index:
+                sample_row = self.current_sample_df.loc[self.selected_row_id]
+                if bool(sample_row.get("_suspicious", False)):
+                    reason = str(sample_row.get("_suspect_reason", ""))
+                    suspect_text = f" | suspect=Y {reason}" if reason else " | suspect=Y"
+            self.selected_info_var.set(
+                f"已选中 row_id={self.selected_row_id} | day={fmt_number(row['gestation_day'], 0)} | "
+                f"weight={fmt_number(row['weight'], 3)} | status={status}{suspect_text}"
+            )
+            self._set_action_state(not deleted)
         self._render_plot()
 
     def _apply(self, operation: str) -> None:
-        if self.selected_row_id is None:
-            messagebox.showinfo("提示", "请先在轨迹图或表格中选中一个点。")
+        targets = [r for r in self.selected_row_ids if r in (self.store.df.index if self.store.df is not None else [])]
+        if not targets:
+            messagebox.showinfo("提示", "请先在轨迹图或表格中选中记录。")
             return
-        try:
-            result = self.store.apply_operation(self.selected_row_id, operation)
-            self._set_status(
-                f"已执行 {operation}: row_id={result.row_id}, "
-                f"weight {result.old_weight:.3f} -> {result.new_weight:.3f}"
-            )
-            sample_id = result.sample_id
-            selected = self.selected_row_id
-            self._load_sample(sample_id, keep_selection=False)
 
-            if operation == "delete":
+        results = []
+        errors = []
+        sample_id = None
+        for row_id in targets:
+            try:
+                rec = self.store.df.loc[row_id]
+                if bool(rec["_deleted"]) and operation in {"x2", "div2", "delete"}:
+                    continue  # 跳过已删除行
+                result = self.store.apply_operation(row_id, operation)
+                results.append(result)
+                sample_id = result.sample_id
+            except Exception as exc:
+                errors.append(f"row_id={row_id}: {exc}")
+
+        if errors:
+            messagebox.showwarning("部分操作失败", "\n".join(errors[:5]))
+        if not results:
+            return
+
+        if len(results) == 1:
+            r = results[0]
+            self._set_status(f"已执行 {operation}: row_id={r.row_id}, weight {r.old_weight:.3f} -> {r.new_weight:.3f}")
+        else:
+            self._set_status(f"已批量执行 {operation}: 共 {len(results)} 条")
+
+        prev_ids = list(self.selected_row_ids)
+        self._load_sample(sample_id, keep_selection=False)
+
+        if operation == "delete":
+            self.selected_row_ids = []
+            self.selected_row_id = None
+            self.selected_info_var.set("已选中记录: 无")
+            self._set_action_state(False)
+        else:
+            # 重新选中仍可见的行
+            still_visible = [r for r in prev_ids if r in self.row_item_map]
+            if still_visible:
+                self._select_rows(still_visible, primary_row_id=still_visible[-1], sync_tree=True)
+            else:
+                self.selected_row_ids = []
                 self.selected_row_id = None
                 self.selected_info_var.set("已选中记录: 无")
                 self._set_action_state(False)
-            else:
-                visible = (selected in self.row_item_map) or (selected in set(self.plot_row_ids.tolist()))
-                if visible:
-                    self._select_row(selected, sync_tree=True)
-                else:
-                    self.selected_row_id = None
-                    self.selected_info_var.set("已选中记录: 无")
-                    self._set_action_state(False)
-                    if self.only_suspect_var.get():
-                        self._set_status("该点已修正，当前不再属于疑似列表。")
-        except Exception as exc:
-            messagebox.showerror("操作失败", str(exc))
+                if self.only_suspect_var.get():
+                    self._set_status("选中点已修正，当前不再属于疑似列表。")
 
     def _undo_last(self) -> None:
         undo = self.store.undo_last()

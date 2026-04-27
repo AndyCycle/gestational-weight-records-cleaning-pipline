@@ -9,50 +9,91 @@ plt.rcParams['axes.unicode_minus'] = False
 print("=== [Pipeline Step 6] 产后断崖锁定 (结合分娩记录打标免修) ===")
 
 INPUT_CSV = r"05_局部尖峰处理版.csv"
-OUT_DIR = r"gestational-weight-records-cleaning-pipline"
+OUT_DIR = r"."
 OUT_CSV = os.path.join(OUT_DIR, "06_产后断崖锁定版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "06_产后断崖锁定_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "06_Plots_产后免修锁定")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 DELIVERY_FILES = [
-    r"分娩记录-201707-202312-清洗地址后.csv",
-    r"分娩记录-第5批-2-清洗地址-去重后-icd11_mapped.xlsx",
-    r"分娩记录-第5批-1-清洗地址后-icd11_mapped.xlsx"
+    r"E:\文件\研究生\项目\宝安妇幼数据搜索\清洗任务\Baoan合并校验\Baoan分娩记录-第1-5批-清洗地址后-icd11_mapped-20260410.xlsx",
 ]
 
-def load_delivery_data():
-    print("正在加载分娩日期记录字典...")
-    dfs = []
-    
-    # 文件1: csv
+import re
+
+def parse_gestational_week(s):
+    """解析 '40 周 1 天'、'37周3天' 等格式为总天数。无法解析或超出生理范围则返回 None。"""
+    if pd.isna(s):
+        return None
+    s = str(s).strip()
+    w_m = re.search(r'(\d+)\s*周', s)
+    d_m = re.search(r'(\d+)\s*天', s)
+    if w_m is None:
+        return None
+    weeks = int(w_m.group(1))
+    extra = int(d_m.group(1)) if d_m else 0
+    total = weeks * 7 + extra
+    # 生理范围：20 周(140d) ~ 45 周(315d)
+    return total if 140 <= total <= 315 else None
+
+
+def _read_delivery_file(read_func, path, base_cols, **kwargs):
+    """尝试带 '孕周' 列读取；列不存在则补 NaN。"""
     try:
-        df1 = pd.read_csv(DELIVERY_FILES[0], usecols=['项目流水号', '分娩时间'], low_memory=False)
-        dfs.append(df1)
-    except Exception as e:
-        print(f"警告: 无法加载 {DELIVERY_FILES[0]}: {e}")
-        
-    # 文件2和3: xlsx
-    for f in DELIVERY_FILES[1:]:
+        return read_func(path, usecols=base_cols + ['孕周'], **kwargs)
+    except (ValueError, KeyError):
+        df = read_func(path, usecols=base_cols, **kwargs)
+        df['孕周'] = np.nan
+        return df
+
+
+def load_delivery_data():
+    print("正在加载分娩记录（含孕周列）...")
+    dfs = []
+
+    # 根据扩展名自动选择读取函数，不依赖 DELIVERY_FILES 的顺序
+    for f in DELIVERY_FILES:
         try:
-            dx = pd.read_excel(f, usecols=['项目流水号', '分娩时间'])
-            dfs.append(dx)
+            ext = os.path.splitext(f)[1].lower()
+            if ext == '.csv':
+                read_func = pd.read_csv
+                kwargs = {'low_memory': False}
+            else:  # .xlsx / .xls
+                read_func = pd.read_excel
+                kwargs = {}
+            dfs.append(_read_delivery_file(read_func, f, ['项目流水号', '分娩时间'], **kwargs))
         except Exception as e:
             print(f"警告: 无法加载 {f}: {e}")
-            
+
     if not dfs:
-        return {}
-        
+        return {}, {}
+
     delivery_df = pd.concat(dfs, ignore_index=True)
     delivery_df['项目流水号'] = delivery_df['项目流水号'].astype(str).str.strip()
+
+    # ---- gweek_map：从全量记录构建，不要求分娩时间存在 ----
+    # 只要 孕周 列可解析即纳入，覆盖尽可能多的病历
+    delivery_df['_gdays'] = delivery_df['孕周'].apply(parse_gestational_week)
+    gweek_all = delivery_df.dropna(subset=['_gdays']).copy()
+    # 同一病历有多条时，取孕周天数最大的那条（最接近足月）
+    gweek_map = (
+        gweek_all.sort_values('_gdays')
+        .groupby('项目流水号')['_gdays'].last()
+        .astype(int).to_dict()
+    ) if not gweek_all.empty else {}
+
+    # ---- delivery_map：LMP推算兜底用，需要有效分娩时间 ----
     delivery_df['分娩时间'] = pd.to_datetime(delivery_df['分娩时间'], errors='coerce')
-    delivery_df = delivery_df.dropna(subset=['分娩时间'])
-    
-    # 按照流水号去重，或者取第一条
-    # 若有多次记录，取最大时间（保守起见，避免早产误判干扰前期数据）或者直接first
-    delivery_map = delivery_df.sort_values(by='分娩时间').groupby('项目流水号')['分娩时间'].last().to_dict()
-    print(f"成功构建分娩记录字典，共计包含 {len(delivery_map)} 个唯一病历。")
-    return delivery_map
+    delivery_valid = delivery_df.dropna(subset=['分娩时间'])
+    delivery_map = (
+        delivery_valid.sort_values('分娩时间')
+        .groupby('项目流水号')['分娩时间'].last().to_dict()
+    ) if not delivery_valid.empty else {}
+
+    print(f"成功构建 gweek_map（孕周档案）: 覆盖 {len(gweek_map)} 个病历，"
+          f"含有效孕周记录 {len(gweek_all)} 条。")
+    print(f"成功构建 delivery_map（LMP推算兜底）: 覆盖 {len(delivery_map)} 个病历。")
+    return delivery_map, gweek_map
 
 def plot_repair(nid, days, w_raw, pp_days, pp_weights, logs):
     plt.figure(figsize=(10, 6))
@@ -70,7 +111,7 @@ def plot_repair(nid, days, w_raw, pp_days, pp_weights, logs):
     plt.savefig(os.path.join(PLOT_DIR, f"{nid}_Postpartum.png"), dpi=100)
     plt.close()
 
-def mark_postpartum_drops(group, nid, delivery_map):
+def mark_postpartum_drops(group, nid, delivery_map, gweek_map):
     w_orig = group['weight'].values.copy()
     days = group['gestation_day'].values
     valid_mask = ~pd.isna(w_orig)
@@ -83,23 +124,33 @@ def mark_postpartum_drops(group, nid, delivery_map):
     
     is_pp = np.zeros(len(w_orig), dtype=bool)
     
-    # 结合分娩日期计算精确的阈值门槛
-    delivery_date = delivery_map.get(str(nid), pd.NaT)
+    # ---- 确定分娩孕周天数（delivery_gday）----
+    # 优先 1：分娩档案直接记录的"孕周"列（最可靠）
     delivery_gday = None
-    
-    if pd.notna(delivery_date):
-        lmp_series = group['LMP'].dropna()
-        if len(lmp_series) > 0:
-            lmp = pd.to_datetime(lmp_series.iloc[0], errors='coerce')
-            if pd.notna(lmp):
-                delivery_gday = (delivery_date - lmp).days
-                
+    cond_str = "无分娩记录兜底 >270d"
+
+    gweek_days = gweek_map.get(str(nid))
+    if gweek_days is not None:
+        delivery_gday = gweek_days
+        cond_str = f"孕周档案 {gweek_days // 7}w{gweek_days % 7}d={gweek_days}d"
+
+    # 优先 2：分娩时间 + LMP 推算（孕周列缺失时备选）
+    if delivery_gday is None:
+        delivery_date = delivery_map.get(str(nid), pd.NaT)
+        if pd.notna(delivery_date):
+            lmp_series = group['LMP'].dropna()
+            if len(lmp_series) > 0:
+                lmp = pd.to_datetime(lmp_series.iloc[0], errors='coerce')
+                if pd.notna(lmp):
+                    calc = (delivery_date - lmp).days
+                    if 140 <= calc <= 315:
+                        delivery_gday = calc
+                        cond_str = f"LMP推算 {calc}d"
+
     if delivery_gday is not None:
-        threshold_day = delivery_gday - 7 # 允许一周的误差范围
-        cond_str = f"分娩孕周 {delivery_gday}d"
+        threshold_day = delivery_gday - 7  # 允许一周误差
     else:
-        threshold_day = 270 # 如果没有分娩记录作兜底
-        cond_str = "无分娩记录兜底 >270d"
+        threshold_day = 270
     
     # 获取孕前基准体重 (W0)，取前14天内的最早记录
     W0 = None
@@ -150,7 +201,7 @@ def main():
     if id_col not in df.columns: df.rename(columns={df.columns[0]: id_col}, inplace=True)
     df[id_col] = df[id_col].astype(str).str.strip()
     
-    delivery_map = load_delivery_data()
+    delivery_map, gweek_map = load_delivery_data()
     
     grouped = df.sort_values([id_col, 'gestation_day']).groupby(id_col)
     frames, all_logs, marked_count = [], [], 0
@@ -158,7 +209,7 @@ def main():
     
     for i, (nid, group) in enumerate(grouped):
         if i % 10000 == 0: print(f"06处理进度: {i}/{total}...")
-        c_group, logs, marked = mark_postpartum_drops(group.copy(), nid, delivery_map)
+        c_group, logs, marked = mark_postpartum_drops(group.copy(), nid, delivery_map, gweek_map)
         frames.append(c_group)
         if marked:
             marked_count += 1
