@@ -25,6 +25,7 @@ DEFAULT_LOG_FILE = os.path.join(DEFAULT_OUT_DIR, "03_5_day0双源核验_日志.t
 # ============================== 参数 ==============================
 EARLY_DAY_MAX = 98        # 孕早期上限（天），用于寻找最近早孕参照点
 SAME_WEIGHT_TOL = 0.5     # 认定两个体重几乎相同的阈值（kg）
+ALT_MAX_DIFF = 5.0        # 早孕重复时，另一候选与最接近候选差距不超过该值才可优先采用
 BMI_MIN = 14.0            # 生理可信 BMI 下限
 BMI_MAX = 50.0            # 生理可信 BMI 上限
 JIN_MIN_WEIGHT = 75.0     # 大于该体重且 /2 后 BMI 合理时，才考虑斤/公斤录入错误
@@ -32,7 +33,7 @@ JIN_MIN_WEIGHT = 75.0     # 大于该体重且 /2 后 BMI 合理时，才考虑�
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Day=0 双源核验：审计孕前/建册体重来源，并只在明确录入错误时修正 day=0。"
+        description="Day=0 双源核验：按孕早期参照从初检孕前体重/建册体重中重选孕前体重。"
     )
     parser.add_argument("input_csv", nargs="?", default=None, help="任意流程后的输入 CSV。")
     parser.add_argument("--input", dest="input_opt", default=None, help="输入 CSV（等价于位置参数）。")
@@ -149,23 +150,64 @@ def find_nearest_early(group):
     return np.nan, np.nan
 
 
-def choose_init_replacement(current_weight, init_info, nearest_weight):
-    candidates = []
+def build_init_candidates(init_info):
+    candidates = {}
     for src in ["pre_weight", "weight_col"]:
         raw = init_info.get(src, np.nan)
         audit = classify_weight(raw, init_info.get("height_cm", np.nan))
         if not audit["usable"]:
             continue
-        kg = audit["kg"]
-        if abs(kg - current_weight) < SAME_WEIGHT_TOL:
-            continue
-        distance = abs(kg - nearest_weight) if not np.isnan(nearest_weight) else 999.0
-        candidates.append((distance, src, kg, audit))
+        candidates[src] = {
+            "src": src,
+            "kg": audit["kg"],
+            "audit": audit,
+        }
+    return candidates
 
+
+def choose_prepreg_weight(init_info, nearest_weight):
+    """
+    按新规则从初检双源中选择 day=0 孕前体重：
+    1. 先选择最靠近孕早期体重的候选。
+    2. 如果最接近候选与孕早期体重几乎相同，且另一候选与它相差不超过 5kg，
+       优先选择与孕早期体重不同的另一候选，避免复制早孕体重。
+    3. 其他情况选择最接近孕早期体重的候选。
+    """
+    candidates = build_init_candidates(init_info)
     if not candidates:
         return None
-    candidates.sort(key=lambda x: x[0])
-    return candidates[0]
+    if np.isnan(nearest_weight):
+        return None
+    if len(candidates) == 1:
+        only = next(iter(candidates.values()))
+        return {
+            **only,
+            "decision": "single_usable_candidate",
+            "distance_to_early": abs(only["kg"] - nearest_weight),
+        }
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda c: (abs(c["kg"] - nearest_weight), 0 if c["src"] == "pre_weight" else 1),
+    )
+    nearest = ranked[0]
+    other = ranked[1]
+    nearest_same_as_early = abs(nearest["kg"] - nearest_weight) < SAME_WEIGHT_TOL
+    other_same_as_early = abs(other["kg"] - nearest_weight) < SAME_WEIGHT_TOL
+    candidates_close = abs(other["kg"] - nearest["kg"]) <= ALT_MAX_DIFF
+
+    if nearest_same_as_early and not other_same_as_early and candidates_close:
+        return {
+            **other,
+            "decision": "avoid_early_duplicate_within_5kg",
+            "distance_to_early": abs(other["kg"] - nearest_weight),
+        }
+
+    return {
+        **nearest,
+        "decision": "nearest_to_early",
+        "distance_to_early": abs(nearest["kg"] - nearest_weight),
+    }
 
 
 def load_init_lookup():
@@ -290,30 +332,37 @@ def main():
         new_weight = None
         new_source = None
 
-        # 明确的当前 day=0 斤/公斤录入错误：直接按 /2 修正。
-        if current_audit["status"] == "likely_jin":
-            new_weight = current_audit["kg"]
-            new_source = f"{day0_source or 'day0'}_unit_corrected"
-            flag = "current_unit_error_fixed"
-
-        # 当前 day=0 BMI 不可信时，才允许从初检双源中选择更可靠候选。
-        elif current_audit["status"] == "invalid_bmi":
-            replacement = choose_init_replacement(day0_weight, init_info, nearest_weight)
-            if replacement is not None:
-                _, src, kg, audit = replacement
-                new_weight = kg
-                new_source = src if audit["status"] == "valid_kg" else f"{src}_unit_corrected"
-                flag = "current_invalid_replaced_by_init"
-                reasons.append(f"使用{source_label(src)}替代：{audit['reason']}")
+        selected = choose_prepreg_weight(init_info, nearest_weight)
+        if selected is None:
+            if np.isnan(nearest_weight):
+                flag = "no_early_reference"
+                reasons.append("无可用孕早期参照，无法按双源距离规则选择孕前体重")
             else:
-                flag = "current_invalid_no_replacement"
-
-        # 早孕重复只做审计，不再自动替换。当前值越接近早孕参照，越不能把它当成错误本身。
-        elif not np.isnan(nearest_weight) and abs(day0_weight - nearest_weight) < SAME_WEIGHT_TOL:
-            flag = "duplicate_with_early_kept"
+                flag = "no_usable_init_candidate"
+                reasons.append("初检孕前体重和建册体重均不可用，无法替换day=0")
+        else:
+            selected_src = selected["src"]
+            selected_weight = selected["kg"]
+            selected_audit = selected["audit"]
+            decision = selected["decision"]
             reasons.append(
-                "day=0与最近早孕体重几乎相等，仅标记为可能重复引用；当前值BMI合理，保留不替换"
+                f"双源选择={source_label(selected_src)} {selected_weight:.1f}kg"
+                f"({decision}, 距早孕={selected['distance_to_early']:.1f}kg; {selected_audit['reason']})"
             )
+
+            if abs(selected_weight - day0_weight) >= SAME_WEIGHT_TOL:
+                new_weight = selected_weight
+                new_source = (
+                    selected_src
+                    if selected_audit["status"] == "valid_kg"
+                    else f"{selected_src}_unit_corrected"
+                )
+                flag = "day0_reselected_from_init"
+            elif decision == "avoid_early_duplicate_within_5kg":
+                flag = "day0_already_selected_nonduplicate"
+            elif not np.isnan(nearest_weight) and abs(day0_weight - nearest_weight) < SAME_WEIGHT_TOL:
+                flag = "day0_same_as_early_but_selected"
+                reasons.append("双源规则仍选择最接近项，因另一候选缺失、不可用、同样重复或差距超过5kg")
 
         # 初检源中存在疑似斤录入或 BMI 异常，也记录到日志，方便人工核对原始表。
         init_source_errors = []
