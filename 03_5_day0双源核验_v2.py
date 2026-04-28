@@ -30,6 +30,16 @@ BMI_MIN = 14.0            # 生理可信 BMI 下限
 BMI_MAX = 50.0            # 生理可信 BMI 上限
 JIN_MIN_WEIGHT = 75.0     # 大于该体重且 /2 后 BMI 合理时，才考虑斤/公斤录入错误
 
+AUDIT_COLUMNS = [
+    "day0_audit_flag",
+    "day0_audit_reason",
+    "day0_init_height_cm",
+    "day0_pre_weight_raw",
+    "day0_weight_col_raw",
+    "day0_nearest_early_day",
+    "day0_nearest_early_weight",
+]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -238,22 +248,6 @@ def load_init_lookup():
     return lookup
 
 
-def ensure_audit_columns(df):
-    audit_cols = {
-        "day0_audit_flag": "",
-        "day0_audit_reason": "",
-        "day0_init_height_cm": np.nan,
-        "day0_pre_weight_raw": np.nan,
-        "day0_weight_col_raw": np.nan,
-        "day0_nearest_early_day": np.nan,
-        "day0_nearest_early_weight": np.nan,
-    }
-    for col, default in audit_cols.items():
-        if col not in df.columns:
-            df[col] = default
-    return df
-
-
 def main():
     args = parse_args()
     input_csv = args.input_opt or args.input_csv or DEFAULT_INPUT_CSV
@@ -271,8 +265,9 @@ def main():
     if missing_cols:
         raise ValueError(f"输入表缺少必要列: {sorted(missing_cols)}")
 
+    # 旧版脚本曾把审计过程写入主表；重新运行时主动清除，避免污染下游数据。
+    df = df.drop(columns=[col for col in AUDIT_COLUMNS if col in df.columns])
     df["项目流水号"] = df["项目流水号"].astype(str).str.strip()
-    df = ensure_audit_columns(df)
     print(f"  共 {len(df)} 行，{df['项目流水号'].nunique()} 个样本")
 
     logs_all = []
@@ -302,15 +297,8 @@ def main():
         day0_source = str(group.at[day0_idx, "weight_source"]) if "weight_source" in group.columns else ""
         nearest_day, nearest_weight = find_nearest_early(group)
 
-        group.at[day0_idx, "day0_init_height_cm"] = init_height
-        group.at[day0_idx, "day0_pre_weight_raw"] = pre_raw
-        group.at[day0_idx, "day0_weight_col_raw"] = weight_raw
-        group.at[day0_idx, "day0_nearest_early_day"] = nearest_day
-        group.at[day0_idx, "day0_nearest_early_weight"] = nearest_weight
-
         if np.isnan(day0_weight):
-            group.at[day0_idx, "day0_audit_flag"] = "day0_missing"
-            group.at[day0_idx, "day0_audit_reason"] = "day=0体重缺失"
+            logs_all.append(f"[{nid}] day0_missing | day=0体重缺失")
             frames.append(group)
             audit_count += 1
             continue
@@ -384,9 +372,6 @@ def main():
                 group.at[day0_idx, "BMI"] = new_bmi
             fixed_count += 1
             reasons.append(f"修正day=0: {old_weight:.1f}->{new_weight:.1f}kg")
-
-        group.at[day0_idx, "day0_audit_flag"] = flag
-        group.at[day0_idx, "day0_audit_reason"] = " | ".join(reasons)
 
         if flag != "ok":
             audit_count += 1
