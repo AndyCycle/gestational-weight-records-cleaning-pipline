@@ -10,17 +10,17 @@ print("=== [Pipeline V2 Step 3.5] Day=0 双源与录入错误核验 ===")
 # ============================== 路径配置 ==============================
 # 可通过命令行传入任意流程后的 CSV：
 #   python 03_5_day0双源核验_v2.py "HIS系统\清洗流程_v2\04_孕前与早孕异动修复版.csv"
-DEFAULT_INPUT_CSV = r"03_全局与阶跃修复版.csv"
+DEFAULT_INPUT_CSV = r"HIS系统\清洗流程_v2\07_终极清洗结果版_可用于插值_人工校正_20260428_160916.csv"
 
 # 初检原始文件：用于读取「孕前体重」「体重」和「身高」。BMI 核验只使用初检身高。
 INIT_FILES = [
-    r"..\初检\孕妇初检-第五批-to liu-20260319.xlsx",
-    r"..\初检\孕期初检-第1-4批-to liu-20260319.xlsx",
+    r"初检\孕妇初检-第五批-to liu-20260319.xlsx",
+    r"初检\孕期初检-第1-4批-to liu-20260319.xlsx",
 ]
 
-DEFAULT_OUT_DIR = r"."
-DEFAULT_OUT_CSV = os.path.join(DEFAULT_OUT_DIR, "03_5_day0双源核验版.csv")
-DEFAULT_LOG_FILE = os.path.join(DEFAULT_OUT_DIR, "03_5_day0双源核验_日志.txt")
+DEFAULT_OUT_DIR = r"HIS系统\清洗流程_v2"
+DEFAULT_OUT_CSV = os.path.join(DEFAULT_OUT_DIR, "09_day0双源核验版.csv")
+DEFAULT_LOG_FILE = os.path.join(DEFAULT_OUT_DIR, "09_day0双源核验_日志.txt")
 
 # ============================== 参数 ==============================
 EARLY_DAY_MAX = 98        # 孕早期上限（天），用于寻找最近早孕参照点

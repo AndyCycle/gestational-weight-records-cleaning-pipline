@@ -6,8 +6,8 @@ from datetime import datetime
 
 print("=== [Pipeline V2 Step 2] 初步格式化与简易清洗 + day=0 极端BMI兜底 ===")
 
-INPUT_CSV = r"01_合并后底表_带初检.csv"
-OUT_DIR   = r"."
+INPUT_CSV = r"HIS系统\清洗流程_v2\01_合并后底表_带初检.csv"
+OUT_DIR   = r"HIS系统\清洗流程_v2"
 OUT_CSV   = os.path.join(OUT_DIR, "02_初步清洗_去低级失误版.csv")
 LOG_FILE  = os.path.join(OUT_DIR, "02_初步清洗_日志.txt")
 

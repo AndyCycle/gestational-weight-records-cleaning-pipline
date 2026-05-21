@@ -8,11 +8,11 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 4] 孕前与早孕异动校准 ===")
 
-INPUT_CSV = r"HIS系统\清洗流程_v2\03_5_day0双源核验版.csv"
+INPUT_CSV = r"HIS系统\清洗流程_v2\09_day0双源核验版.csv"
 OUT_DIR = r"HIS系统\清洗流程_v2"
-OUT_CSV = os.path.join(OUT_DIR, "04_孕前与早孕异动修复版.csv")
-LOG_FILE = os.path.join(OUT_DIR, "04_早孕异动修复_日志.txt")
-PLOT_DIR = os.path.join(OUT_DIR, "04_Plots_早孕异动")
+OUT_CSV = os.path.join(OUT_DIR, "10_孕前与早孕异动修复版.csv")
+LOG_FILE = os.path.join(OUT_DIR, "10_早孕异动修复_日志.txt")
+PLOT_DIR = os.path.join(OUT_DIR, "10_Plots_早孕异动")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 def plot_repair(nid, days, w_raw, w_clean, error_type, logs):

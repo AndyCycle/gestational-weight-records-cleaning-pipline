@@ -8,12 +8,12 @@ print("=== [Pipeline V2 Step 1] 合并初检记录（四路决策树 + 身高统
 # ============================== 配置路径 ==============================
 # 初检文件列表（放在宝安数据根目录，与本脚本的工作目录一致）
 INIT_FILES = [
-    r"..\初检\孕妇初检-第五批-to liu-20260319.xlsx",
-    r"..\初检\孕期初检-第1-4批-to liu-20260319.xlsx",
+    r"初检\孕妇初检-第五批-to liu-20260319.xlsx",
+    r"初检\孕期初检-第1-4批-to liu-20260319.xlsx",
 ]
-HIS_PATH   = r"..\宝安_HIS前处理_合并表.csv"
+HIS_PATH   = r"HIS系统\宝安_HIS前处理_合并表.csv"
 
-OUT_DIR  = r"."
+OUT_DIR  = r"HIS系统\清洗流程_v2"
 os.makedirs(OUT_DIR, exist_ok=True)
 OUT_PATH = os.path.join(OUT_DIR, "01_合并后底表_带初检.csv")
 LOG_PATH = os.path.join(OUT_DIR, "01_合并初检_日志.txt")

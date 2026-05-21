@@ -9,9 +9,9 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline V2 Step 3] 全局斤系与长程阶跃修复（含分娩记录外部验证）===")
 
-INPUT_CSV     = r"02_初步清洗_去低级失误版.csv"
-DELIVERY_XLSX = r"..\宝安妇幼数据搜索\清洗任务\Baoan合并校验\Baoan分娩记录-第1-5批-清洗地址后-icd11_mapped-20260410.xlsx"
-OUT_DIR       = r"."
+INPUT_CSV     = r"HIS系统\清洗流程_v2\02_初步清洗_去低级失误版.csv"
+DELIVERY_XLSX = r"E:\文件\研究生\项目\宝安妇幼数据搜索\清洗任务\Baoan合并校验\Baoan分娩记录-第1-5批-清洗地址后-icd11_mapped-20260410.xlsx"
+OUT_DIR       = r"HIS系统\清洗流程_v2"
 OUT_CSV       = os.path.join(OUT_DIR, "03_全局与阶跃修复版.csv")
 LOG_FILE      = os.path.join(OUT_DIR, "03_全局与阶跃修复_日志.txt")
 PLOT_DIR      = os.path.join(OUT_DIR, "03_Plots_全局与阶跃")

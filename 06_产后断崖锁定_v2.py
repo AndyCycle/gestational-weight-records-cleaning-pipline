@@ -8,8 +8,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 6] 产后断崖锁定 (结合分娩记录打标免修) ===")
 
-INPUT_CSV = r"05_局部尖峰处理版.csv"
-OUT_DIR = r"."
+INPUT_CSV = r"HIS系统\清洗流程_v2\05_局部尖峰处理版.csv"
+OUT_DIR = r"HIS系统\清洗流程_v2"
 OUT_CSV = os.path.join(OUT_DIR, "06_产后断崖锁定版.csv")
 LOG_FILE = os.path.join(OUT_DIR, "06_产后断崖锁定_日志.txt")
 PLOT_DIR = os.path.join(OUT_DIR, "06_Plots_产后免修锁定")

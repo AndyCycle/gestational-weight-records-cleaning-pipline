@@ -10,8 +10,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 print("=== [Pipeline Step 8] 全面质控扫描与可视化审计 ===")
 
-INPUT_CSV = r"07_终极清洗结果版_可用于插值.csv"
-OUT_DIR = r"."
+INPUT_CSV = r"HIS系统\清洗流程_v2\07_终极清洗结果版_可用于插值.csv"
+OUT_DIR = r"HIS系统\清洗流程_v2"
 REPORT_FILE = os.path.join(OUT_DIR, "08_质控扫描报告.txt")
 FLAGGED_CSV = os.path.join(OUT_DIR, "08_被标记的可疑样本一览.csv")
 
@@ -310,3 +310,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
