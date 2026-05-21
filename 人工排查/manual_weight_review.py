@@ -5,7 +5,7 @@ Pregnancy weight manual review tool.
 
 Features:
 1) Visualize one sample's trajectory (gestation_day vs weight).
-2) Click a point in plot/table, then apply: x2, /2, delete.
+2) Click a point in plot/table, then apply: x2, /2, +10, -10, delete.
 3) Keep source CSV read-only; persist edits into an operation log.
 4) Export final corrected CSV after manual review.
 """
@@ -345,7 +345,7 @@ class ReviewStore:
         old_bmi = float(record["BMI"]) if "BMI" in self.df.columns and not pd.isna(record["BMI"]) else np.nan
         old_deleted = bool(record["_deleted"])
 
-        if old_deleted and operation in {"x2", "div2", "delete"}:
+        if old_deleted and operation in {"x2", "div2", "add10", "sub10", "delete"}:
             raise ValueError("当前记录已删除。")
 
         if operation == "x2":
@@ -354,16 +354,22 @@ class ReviewStore:
         elif operation == "div2":
             new_weight = old_weight / 2.0
             new_deleted = False
+        elif operation == "add10":
+            new_weight = old_weight + 10.0
+            new_deleted = False
+        elif operation == "sub10":
+            new_weight = old_weight - 10.0
+            new_deleted = False
         elif operation == "delete":
             new_weight = old_weight
             new_deleted = True
         else:
             raise ValueError(f"未知操作: {operation}")
 
-        if operation in {"x2", "div2"} and (pd.isna(old_weight)):
-            raise ValueError("当前体重为空，无法执行乘除。")
+        if operation in {"x2", "div2", "add10", "sub10"} and (pd.isna(old_weight)):
+            raise ValueError("当前体重为空，无法执行数值操作。")
 
-        new_bmi = self._recalc_bmi(row_id, new_weight) if operation in {"x2", "div2"} else old_bmi
+        new_bmi = self._recalc_bmi(row_id, new_weight) if operation in {"x2", "div2", "add10", "sub10"} else old_bmi
 
         self.df.at[row_id, "weight"] = new_weight
         if "BMI" in self.df.columns:
@@ -607,13 +613,19 @@ class ReviewApp:
         action.columnconfigure(0, weight=1)
         action.columnconfigure(1, weight=1)
         action.columnconfigure(2, weight=1)
+        action.columnconfigure(3, weight=1)
+        action.columnconfigure(4, weight=1)
 
         self.btn_x2 = ttk.Button(action, text="×2", command=lambda: self._apply("x2"))
         self.btn_div2 = ttk.Button(action, text="÷2", command=lambda: self._apply("div2"))
+        self.btn_add10 = ttk.Button(action, text="+10kg", command=lambda: self._apply("add10"))
+        self.btn_sub10 = ttk.Button(action, text="-10kg", command=lambda: self._apply("sub10"))
         self.btn_delete = ttk.Button(action, text="删除该记录", command=lambda: self._apply("delete"))
         self.btn_x2.grid(row=0, column=0, sticky="ew", padx=4)
         self.btn_div2.grid(row=0, column=1, sticky="ew", padx=4)
-        self.btn_delete.grid(row=0, column=2, sticky="ew", padx=4)
+        self.btn_add10.grid(row=0, column=2, sticky="ew", padx=4)
+        self.btn_sub10.grid(row=0, column=3, sticky="ew", padx=4)
+        self.btn_delete.grid(row=0, column=4, sticky="ew", padx=4)
 
         status = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=(8, 3))
         status.grid(row=3, column=0, columnspan=2, sticky="ew")
@@ -637,6 +649,8 @@ class ReviewApp:
         state = tk.NORMAL if enabled else tk.DISABLED
         self.btn_x2.configure(state=state)
         self.btn_div2.configure(state=state)
+        self.btn_add10.configure(state=state)
+        self.btn_sub10.configure(state=state)
         self.btn_delete.configure(state=state)
 
     def _get_jump_threshold(self) -> float:
@@ -1027,7 +1041,7 @@ class ReviewApp:
         for row_id in targets:
             try:
                 rec = self.store.df.loc[row_id]
-                if bool(rec["_deleted"]) and operation in {"x2", "div2", "delete"}:
+                if bool(rec["_deleted"]) and operation in {"x2", "div2", "add10", "sub10", "delete"}:
                     continue  # 跳过已删除行
                 result = self.store.apply_operation(row_id, operation)
                 results.append(result)
