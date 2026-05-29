@@ -6,8 +6,9 @@ Pregnancy weight manual review tool.
 Features:
 1) Visualize one sample's trajectory (gestation_day vs weight).
 2) Click a point in plot/table, then apply: x2, /2, +10, -10, delete.
-3) Keep source CSV read-only; persist edits into an operation log.
-4) Export final corrected CSV after manual review.
+3) Support manual input to set selected point weight directly.
+4) Keep source CSV read-only; persist edits into an operation log.
+5) Export final corrected CSV after manual review.
 """
 
 from __future__ import annotations
@@ -333,7 +334,7 @@ class ReviewStore:
             encoding="utf-8-sig",
         )
 
-    def apply_operation(self, row_id: int, operation: str) -> EditResult:
+    def apply_operation(self, row_id: int, operation: str, manual_weight: Optional[float] = None) -> EditResult:
         if self.df is None:
             raise RuntimeError("数据未加载。")
         if row_id not in self.df.index:
@@ -345,7 +346,7 @@ class ReviewStore:
         old_bmi = float(record["BMI"]) if "BMI" in self.df.columns and not pd.isna(record["BMI"]) else np.nan
         old_deleted = bool(record["_deleted"])
 
-        if old_deleted and operation in {"x2", "div2", "add10", "sub10", "delete"}:
+        if old_deleted and operation in {"x2", "div2", "add10", "sub10", "set_weight", "delete"}:
             raise ValueError("当前记录已删除。")
 
         if operation == "x2":
@@ -360,6 +361,13 @@ class ReviewStore:
         elif operation == "sub10":
             new_weight = old_weight - 10.0
             new_deleted = False
+        elif operation == "set_weight":
+            if manual_weight is None or pd.isna(manual_weight):
+                raise ValueError("请输入有效的目标体重。")
+            new_weight = float(manual_weight)
+            if (not np.isfinite(new_weight)) or new_weight <= 0:
+                raise ValueError("目标体重必须是大于 0 的数字。")
+            new_deleted = False
         elif operation == "delete":
             new_weight = old_weight
             new_deleted = True
@@ -369,7 +377,7 @@ class ReviewStore:
         if operation in {"x2", "div2", "add10", "sub10"} and (pd.isna(old_weight)):
             raise ValueError("当前体重为空，无法执行数值操作。")
 
-        new_bmi = self._recalc_bmi(row_id, new_weight) if operation in {"x2", "div2", "add10", "sub10"} else old_bmi
+        new_bmi = self._recalc_bmi(row_id, new_weight) if operation in {"x2", "div2", "add10", "sub10", "set_weight"} else old_bmi
 
         self.df.at[row_id, "weight"] = new_weight
         if "BMI" in self.df.columns:
@@ -461,6 +469,7 @@ class ReviewApp:
         self.sample_var = tk.StringVar()
         self.only_suspect_var = tk.BooleanVar(value=False)
         self.jump_threshold_var = tk.StringVar(value="8")
+        self.manual_weight_var = tk.StringVar(value="")
         self.sample_info_var = tk.StringVar(value="样本: -")
         self.selected_info_var = tk.StringVar(value="已选中记录: 无")
         self.status_var = tk.StringVar(value="准备就绪")
@@ -627,6 +636,13 @@ class ReviewApp:
         self.btn_sub10.grid(row=0, column=3, sticky="ew", padx=4)
         self.btn_delete.grid(row=0, column=4, sticky="ew", padx=4)
 
+        ttk.Label(action, text="目标体重(kg):").grid(row=1, column=0, sticky="e", padx=(4, 2), pady=(8, 0))
+        manual_weight_entry = ttk.Entry(action, textvariable=self.manual_weight_var, width=10)
+        manual_weight_entry.grid(row=1, column=1, sticky="w", padx=(2, 4), pady=(8, 0))
+        manual_weight_entry.bind("<Return>", lambda _: self._apply_manual_weight())
+        self.btn_set_weight = ttk.Button(action, text="应用输入值", command=self._apply_manual_weight)
+        self.btn_set_weight.grid(row=1, column=2, columnspan=2, sticky="ew", padx=4, pady=(8, 0))
+
         status = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=(8, 3))
         status.grid(row=3, column=0, columnspan=2, sticky="ew")
 
@@ -651,7 +667,23 @@ class ReviewApp:
         self.btn_div2.configure(state=state)
         self.btn_add10.configure(state=state)
         self.btn_sub10.configure(state=state)
+        self.btn_set_weight.configure(state=state)
         self.btn_delete.configure(state=state)
+
+    def _apply_manual_weight(self) -> None:
+        raw = self.manual_weight_var.get().strip()
+        if not raw:
+            messagebox.showinfo("提示", "请输入目标体重(kg)。")
+            return
+        try:
+            manual_weight = float(raw)
+        except Exception:
+            messagebox.showwarning("输入无效", "请输入有效数字，例如 68.5")
+            return
+        if (not np.isfinite(manual_weight)) or manual_weight <= 0:
+            messagebox.showwarning("输入无效", "目标体重必须是大于 0 的数字。")
+            return
+        self._apply("set_weight", manual_weight=manual_weight)
 
     def _get_jump_threshold(self) -> float:
         raw = self.jump_threshold_var.get().strip()
@@ -1029,7 +1061,7 @@ class ReviewApp:
             self._set_action_state(not deleted)
         self._render_plot()
 
-    def _apply(self, operation: str) -> None:
+    def _apply(self, operation: str, manual_weight: Optional[float] = None) -> None:
         targets = [r for r in self.selected_row_ids if r in (self.store.df.index if self.store.df is not None else [])]
         if not targets:
             messagebox.showinfo("提示", "请先在轨迹图或表格中选中记录。")
@@ -1041,9 +1073,9 @@ class ReviewApp:
         for row_id in targets:
             try:
                 rec = self.store.df.loc[row_id]
-                if bool(rec["_deleted"]) and operation in {"x2", "div2", "add10", "sub10", "delete"}:
+                if bool(rec["_deleted"]) and operation in {"x2", "div2", "add10", "sub10", "set_weight", "delete"}:
                     continue  # 跳过已删除行
-                result = self.store.apply_operation(row_id, operation)
+                result = self.store.apply_operation(row_id, operation, manual_weight=manual_weight)
                 results.append(result)
                 sample_id = result.sample_id
             except Exception as exc:
@@ -1054,11 +1086,23 @@ class ReviewApp:
         if not results:
             return
 
+        op_label = {
+            "x2": "×2",
+            "div2": "÷2",
+            "add10": "+10kg",
+            "sub10": "-10kg",
+            "set_weight": "设置体重",
+            "delete": "删除",
+        }.get(operation, operation)
+
         if len(results) == 1:
             r = results[0]
-            self._set_status(f"已执行 {operation}: row_id={r.row_id}, weight {r.old_weight:.3f} -> {r.new_weight:.3f}")
+            self._set_status(f"已执行 {op_label}: row_id={r.row_id}, weight {r.old_weight:.3f} -> {r.new_weight:.3f}")
         else:
-            self._set_status(f"已批量执行 {operation}: 共 {len(results)} 条")
+            if operation == "set_weight" and manual_weight is not None:
+                self._set_status(f"已批量执行 {op_label}={manual_weight:.3f}kg: 共 {len(results)} 条")
+            else:
+                self._set_status(f"已批量执行 {op_label}: 共 {len(results)} 条")
 
         prev_ids = list(self.selected_row_ids)
         self._load_sample(sample_id, keep_selection=False)
