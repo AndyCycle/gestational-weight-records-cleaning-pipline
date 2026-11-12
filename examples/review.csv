@@ -1,0 +1,2 @@
+record_id,expected_weight,operation,new_weight,reason
+demo02,104,set_weight,52,Synthetic example with independently confirmed jin entry

@@ -1,0 +1,23 @@
+{
+  "columns": {
+    "record_id": "record_id",
+    "pregnancy_id": "pregnancy_id",
+    "gestation_day": "gestation_day",
+    "weight": "weight",
+    "height": "height",
+    "delivery_day": "delivery_day"
+  },
+  "units": {
+    "weight": "kg",
+    "height": "cm"
+  },
+  "rules": {
+    "weight_range": [
+      30,
+      140
+    ],
+    "local_spike_kg": 15,
+    "neighbor_agreement_kg": 12,
+    "exclude_postpartum": false
+  }
+}

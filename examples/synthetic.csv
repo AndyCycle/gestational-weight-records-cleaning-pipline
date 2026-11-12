@@ -1,0 +1,8 @@
+record_id,pregnancy_id,gestation_day,weight,height,delivery_day
+demo01,synthetic-A,60,50,160,280
+demo02,synthetic-A,120,104,160,280
+demo03,synthetic-A,180,54,160,280
+demo04,synthetic-A,285,48,160,280
+demo05,synthetic-B,80,110,165,
+demo06,synthetic-B,160,112,165,
+demo07,synthetic-B,240,115,165,
